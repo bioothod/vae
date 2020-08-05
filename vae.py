@@ -1,4 +1,5 @@
 import logging
+import os
 
 import numpy as np
 import tensorflow as tf
@@ -85,6 +86,35 @@ class VAE(tf.keras.Model):
 
         return dec_output, mu, sigma
 
+    @tf.function
+    def generate(self, labels: tf.Tensor, output_dir: str):
+        batch_size = tf.shape(labels)[0]
+
+        if False:
+            z = tf.zeros([batch_size, self.n_z], dtype=tf.float32)
+        else:
+            z = tf.random.normal([batch_size, self.n_z], mean=0, stddev=1)
+
+        dec_input = tf.concat([z, labels], -1)
+        dec_output = self.decoder(dec_input, training=False)
+        n = tf.cast(dec_output.shape[1], tf.float32)
+        n = tf.cast(tf.math.sqrt(n), tf.int32)
+        dec_output = tf.reshape(dec_output, [batch_size, n, n, 1])
+        grey_data = tf.cast(dec_output * 255, tf.uint8)
+
+        indexes = tf.range(tf.shape(labels)[0])
+
+        def save_image(index):
+            filename = tf.strings.format('{}.png', index)
+            filename = tf.strings.join([output_dir, '/', filename])
+
+            data = grey_data[index, ...]
+            img = tf.io.encode_png(data)
+            tf.io.write_file(filename, img)
+            return index
+
+        tf.map_fn(save_image, indexes, parallel_iterations=16)
+
 class Metric:
     def __init__(self):
         self.kl_loss = tf.keras.metrics.Mean(name='kl_loss')
@@ -145,7 +175,7 @@ def main():
     x_train = tf.reshape(x_train, [-1, n_pixels])
     x_test = tf.reshape(x_test, [-1, n_pixels])
 
-    batch_size = 128
+    batch_size = 512
 
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(batch_size)
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size)
@@ -157,6 +187,13 @@ def main():
     decoder_output_dim = 28*28
 
     model = VAE(encoder_hidden_dims=encoder_hidden_dims, num_z=num_latent_vars, decoder_hidden_dims=decoder_hidden_dims, num_outputs=decoder_output_dim)
+
+    generate_labels = tf.range(num_labels)
+    generate_labels = tf.one_hot(generate_labels, num_labels)
+    output_dir = tf.Variable('results/start')
+    if False:
+        model.generate(generate_labels, output_dir)
+        exit(0)
 
     opt = tf.keras.optimizers.Adam(lr=0.001)
 
@@ -176,7 +213,7 @@ def main():
         y_pred, mu, sigma = model(images, labels, training=False)
         loss = loss_object(images, y_pred, mu, sigma, training=False)
 
-    num_epochs = 50
+    num_epochs = 150
     for epoch in range(num_epochs):
         loss_object.reset_states()
 
@@ -191,6 +228,9 @@ def main():
                 loss_object.train_metric.str_result(),
                 loss_object.eval_metric.str_result(),
             ))
+
+        output_dir.assign('results/{}'.format(epoch))
+        model.generate(generate_labels, output_dir)
 
 if __name__ == '__main__':
     main()
