@@ -15,7 +15,7 @@ class BaseV2(tf.keras.layers.Layer):
         return x
 
 class BlockV2(tf.keras.layers.Layer):
-    def __init__(self, channels_in, kernel_size, stride=1, conv_shortcut=False, **kwargs):
+    def __init__(self, channels_in, kernel_size=3, stride=1, conv_shortcut=False, **kwargs):
         super().__init__(**kwargs)
 
         channels_out = channels_in * 4
@@ -33,7 +33,7 @@ class BlockV2(tf.keras.layers.Layer):
             self.shortcut = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=stride, padding='same')
         else:
             if stride > 1:
-                self.shortcut = tf.keras.layers.MaxPooling(pool_size=1, strides=stride, padding='same')
+                self.shortcut = tf.keras.layers.MaxPool2D(pool_size=1, strides=stride, padding='same')
             else:
                 self.shortcut = lambda x: x
 
