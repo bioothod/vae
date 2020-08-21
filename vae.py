@@ -22,8 +22,9 @@ class Encoder(tf.keras.layers.Layer):
         self.z_sigma = tf.keras.layers.Dense(n_z)
 
 
-    def call(self, inputs: tf.Tensor, training: bool):
-        x = inputs
+    def call(self, inputs: tf.Tensor, condition: tf.Tensor, training: bool):
+        x = tf.concat([inputs, condition], -1)
+
         for dense in self.dense_layers:
             x = dense(x)
 
@@ -68,15 +69,20 @@ class VAE(tf.keras.Model):
 
         self.n_z = num_z
 
+        self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
+
         self.encoder = Encoder(encoder_hidden_dims, num_z)
         self.decoder = Decoder(decoder_hidden_dims, num_outputs)
 
 
     def call(self, inputs: tf.Tensor, labels: tf.Tensor, training: bool):
-        enc_input = tf.concat([inputs, labels], -1)
-        mu, sigma = self.encoder(enc_input, training)
-
         batch_size = tf.shape(inputs)[0]
+
+        scaled_x = self.rescale(inputs)
+        scaled_x = tf.reshape(scaled_x, [batch_size, -1])
+
+        mu, sigma = self.encoder(scaled_x, labels, training)
+
         eps = tf.random.normal([batch_size, self.n_z], mean=0, stddev=1)
         z = mu + tf.math.exp(sigma / 2) * eps
 
@@ -84,13 +90,13 @@ class VAE(tf.keras.Model):
         dec_input = tf.concat([z, labels], -1)
         dec_output = self.decoder(dec_input, training)
 
-        return dec_output, mu, sigma
+        return scaled_x, dec_output, mu, sigma
 
     @tf.function
     def generate(self, labels: tf.Tensor, output_dir: str):
         batch_size = tf.shape(labels)[0]
 
-        if False:
+        if True:
             z = tf.zeros([batch_size, self.n_z], dtype=tf.float32)
         else:
             z = tf.random.normal([batch_size, self.n_z], mean=0, stddev=1)
@@ -127,7 +133,7 @@ class Metric:
         self.total_loss.reset_states()
 
     def str_result(self):
-        return 'loss: kl: {:.4f}, rec: {:.4f}, total: {:.4f}'.format(self.kl_loss.result(), self.rec_loss.result(), self.total_loss.result())
+        return 'loss: kl: {:.4e}, rec: {:.4e}, total: {:.4e}'.format(self.kl_loss.result(), self.rec_loss.result(), self.total_loss.result())
 
 class Loss:
     def __init__(self, from_logits: bool):
@@ -165,15 +171,9 @@ def main():
     x_train = tf.cast(x_train, tf.float32)
     x_test = tf.cast(x_test, tf.float32)
 
-    x_train, x_test = x_train / 255.0, x_test / 255.0
-
     num_labels = 10
     y_train = tf.one_hot(y_train, num_labels)
     y_test = tf.one_hot(y_test, num_labels)
-
-    n_pixels = tf.reduce_prod(x_train.shape[1:])
-    x_train = tf.reshape(x_train, [-1, n_pixels])
-    x_test = tf.reshape(x_test, [-1, n_pixels])
 
     batch_size = 512
 
@@ -187,10 +187,12 @@ def main():
     decoder_output_dim = 28*28
 
     model = VAE(encoder_hidden_dims=encoder_hidden_dims, num_z=num_latent_vars, decoder_hidden_dims=decoder_hidden_dims, num_outputs=decoder_output_dim)
+    model(tf.ones([batch_size, 28*28], dtype=tf.float32), tf.zeros([batch_size, num_labels], dtype=tf.float32), training=True)
+    model.summary()
 
     generate_labels = tf.range(num_labels)
     generate_labels = tf.one_hot(generate_labels, num_labels)
-    output_dir = tf.Variable('results/start')
+    output_dir = tf.Variable('results_dense/start')
     if False:
         model.generate(generate_labels, output_dir)
         exit(0)
@@ -202,16 +204,16 @@ def main():
     @tf.function
     def train_step(images, labels):
         with tf.GradientTape() as tape:
-            y_pred, mu, sigma = model(images, labels, training=True)
-            loss = loss_object(images, y_pred, mu, sigma, training=True)
+            scaled_x, y_pred, mu, sigma = model(images, labels, training=True)
+            loss = loss_object(scaled_x, y_pred, mu, sigma, training=True)
 
         gradients = tape.gradient(loss, model.trainable_variables)
         opt.apply_gradients(zip(gradients, model.trainable_variables))
 
     @tf.function
     def test_step(images, labels):
-        y_pred, mu, sigma = model(images, labels, training=False)
-        loss = loss_object(images, y_pred, mu, sigma, training=False)
+        scaled_x, y_pred, mu, sigma = model(images, labels, training=False)
+        loss = loss_object(scaled_x, y_pred, mu, sigma, training=False)
 
     num_epochs = 150
     for epoch in range(num_epochs):
@@ -229,7 +231,7 @@ def main():
                 loss_object.eval_metric.str_result(),
             ))
 
-        output_dir.assign('results/{}'.format(epoch))
+        output_dir.assign('results_dense/{}'.format(epoch))
         model.generate(generate_labels, output_dir)
 
 if __name__ == '__main__':
