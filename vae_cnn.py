@@ -20,28 +20,35 @@ class EncoderBlock(tf.keras.layers.Layer):
 
         self.relu_fn = tf.nn.swish
 
-        self.bn0 = tf.keras.layers.BatchNormalization()
-        self.conv0 = tf.keras.layers.Conv2D(channels_out, kernel_size=3, strides=1, name='conv0', padding='same')
-        self.bn1 = tf.keras.layers.BatchNormalization()
-        self.conv1 = tf.keras.layers.Conv2D(channels_out, kernel_size=3, strides=1, name='conv1', padding='same')
-        self.max_pooling = tf.keras.layers.MaxPool2D(2)
+        channels_in = channels_out // 4
 
-        #self.dropout = tf.keras.layers.Dropout(rate=0.3)
+        self.preact_bn = tf.keras.layers.BatchNormalization()
+
+        self.bn0 = tf.keras.layers.BatchNormalization()
+        self.conv0 = tf.keras.layers.Conv2D(channels_in, kernel_size=1, strides=1, name='conv0', padding='same')
+        self.bn1 = tf.keras.layers.BatchNormalization()
+        self.conv1 = tf.keras.layers.Conv2D(channels_in, kernel_size=3, strides=2, name='conv1', padding='same')
+        self.conv2 = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=1, name='conv1', padding='same')
+
+        self.shortcut = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=2, name='conv1', padding='same')
 
     def __call__(self, inputs, training=True):
-        x = inputs
+        preact = self.preact_bn(inputs, training=training)
+        preact = self.relu_fn(preact)
 
+        shortcut = self.shortcut(preact)
+
+        x = self.conv0(preact)
         x = self.bn0(x, training=training)
         x = self.relu_fn(x)
-        x = self.conv0(x)
 
+        x = self.conv1(x)
         x = self.bn1(x, training=training)
         x = self.relu_fn(x)
-        x = self.conv1(x)
 
-        x = self.max_pooling(x)
+        x = self.conv2(x)
 
-        #x = self.dropout(x, training=training)
+        x += shortcut
 
         return x
 
@@ -62,13 +69,11 @@ class DecoderBlock(tf.keras.layers.Layer):
         super().__init__(**kwargs)
 
         self.relu_fn = tf.nn.swish
-        self.upsampling = tf.keras.layers.UpSampling2D(size=2)
-        self.conv0 = tf.keras.layers.Conv2DTranspose(channels_out, kernel_size=3, strides=1, name='conv0', padding='same', activation=self.relu_fn)
+        self.conv0 = tf.keras.layers.Conv2DTranspose(channels_out, kernel_size=3, strides=2, name='conv0', padding='same', activation=self.relu_fn)
         self.conv1 = tf.keras.layers.Conv2DTranspose(channels_out, kernel_size=3, strides=1, name='conv1', padding='same', activation=self.relu_fn)
 
     def __call__(self, inputs, training=True):
-        x = self.upsampling(inputs)
-        #x = inputs
+        x = inputs
         x = self.conv0(x)
         x = self.conv1(x)
         return x
@@ -303,7 +308,7 @@ def main():
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(batch_size)
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size).cache()
 
-    encoder_hidden_dims = [16, 32]
+    encoder_hidden_dims = [16, 32, 64]
     encoder_input_shape = [28, 28, 1]
     num_latent_vars = 2
 
