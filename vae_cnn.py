@@ -14,23 +14,38 @@ __handler = logging.StreamHandler()
 __handler.setFormatter(__fmt)
 logger.addHandler(__handler)
 
-class EncoderBlock1(tf.keras.layers.Layer):
-    def __init__(self, num_features, **kwargs):
+class EncoderBlock(tf.keras.layers.Layer):
+    def __init__(self, channels_out, **kwargs):
         super().__init__(**kwargs)
 
         self.relu_fn = tf.nn.swish
 
-        self.conv0 = tf.keras.layers.Conv2D(num_features, kernel_size=3, name='conv0', padding='same', activation=self.relu_fn)
-        self.conv1 = tf.keras.layers.Conv2D(num_features, kernel_size=3, name='conv1', padding='same', activation=self.relu_fn)
-        self.max_pooling = tf.keras.layers.MaxPool2D(pool_size=2, strides=2, padding='same')
+        self.bn0 = tf.keras.layers.BatchNormalization()
+        self.conv0 = tf.keras.layers.Conv2D(channels_out, kernel_size=3, strides=1, name='conv0', padding='same')
+        self.bn1 = tf.keras.layers.BatchNormalization()
+        self.conv1 = tf.keras.layers.Conv2D(channels_out, kernel_size=3, strides=1, name='conv1', padding='same')
+        self.max_pooling = tf.keras.layers.MaxPool2D(2)
+
+        #self.dropout = tf.keras.layers.Dropout(rate=0.3)
 
     def __call__(self, inputs, training=True):
-        x = self.conv0(inputs)
+        x = inputs
+
+        x = self.bn0(x, training=training)
+        x = self.relu_fn(x)
+        x = self.conv0(x)
+
+        x = self.bn1(x, training=training)
+        x = self.relu_fn(x)
         x = self.conv1(x)
+
         x = self.max_pooling(x)
+
+        #x = self.dropout(x, training=training)
+
         return x
 
-class EncoderBlock(tf.keras.layers.Layer):
+class EncoderBlock1(tf.keras.layers.Layer):
     def __init__(self, num_features, **kwargs):
         super().__init__(**kwargs)
 
@@ -42,23 +57,23 @@ class EncoderBlock(tf.keras.layers.Layer):
         x = self.dense(inputs)
         return x
 
-class DecoderBlock1(tf.keras.layers.Layer):
-    def __init__(self, num_features, **kwargs):
+class DecoderBlock(tf.keras.layers.Layer):
+    def __init__(self, channels_out, **kwargs):
         super().__init__(**kwargs)
 
         self.relu_fn = tf.nn.swish
-
         self.upsampling = tf.keras.layers.UpSampling2D(size=2)
-        self.conv0 = tf.keras.layers.Conv2DTranspose(num_features, kernel_size=3, name='conv0', padding='same', activation=self.relu_fn)
-        self.conv1 = tf.keras.layers.Conv2DTranspose(num_features, kernel_size=3, name='conv1', padding='same', activation=self.relu_fn)
+        self.conv0 = tf.keras.layers.Conv2DTranspose(channels_out, kernel_size=3, strides=1, name='conv0', padding='same', activation=self.relu_fn)
+        self.conv1 = tf.keras.layers.Conv2DTranspose(channels_out, kernel_size=3, strides=1, name='conv1', padding='same', activation=self.relu_fn)
 
     def __call__(self, inputs, training=True):
         x = self.upsampling(inputs)
+        #x = inputs
         x = self.conv0(x)
         x = self.conv1(x)
         return x
 
-class DecoderBlock(tf.keras.layers.Layer):
+class DecoderBlock1(tf.keras.layers.Layer):
     def __init__(self, num_features, **kwargs):
         super().__init__(**kwargs)
 
@@ -94,25 +109,26 @@ class Encoder(tf.keras.layers.Layer):
             l = EncoderBlock(num, name='enc{}_{}'.format(i, num))
             self.layers.append(l)
 
+        self.flatten = tf.keras.layers.Flatten()
+
         self.z_mu = tf.keras.layers.Dense(n_z)
         self.z_sigma = tf.keras.layers.Dense(n_z)
 
 
     def call(self, inputs: tf.Tensor, condition: tf.Tensor, training: bool):
-        if False:
-            if self.condition:
-                b, h, w, c = inputs.shape
+        if self.condition:
+            b, h, w, c = inputs.shape
 
-                x = self.condition(condition, training=training)
-                x = tf.reshape(x, [b, h, w, 1])
-                x = tf.concat([inputs, x], axis=3)
-            else:
-                x = inputs
-
-        x = tf.concat([inputs, condition], -1)
+            x = self.condition(condition, training=training)
+            x = tf.reshape(x, [b, h, w, 1])
+            x = tf.concat([inputs, x], axis=3)
+        else:
+            x = inputs
 
         for layer in self.layers:
             x = layer(x, training=training)
+
+        x = self.flatten(x)
 
         mu = self.z_mu(x)
         sigma = self.z_sigma(x)
@@ -140,8 +156,7 @@ class Decoder(tf.keras.layers.Layer):
             layer = DecoderBlock(num, name='dec{}_{}'.format(i, num))
             self.layers.append(layer)
 
-        self.out = tf.keras.layers.Dense(28*28, activation='sigmoid')
-        #self.out = tf.keras.layers.Conv2D(output_channels, kernel_size=1, padding='same', activation='sigmoid')
+        self.out = tf.keras.layers.Conv2DTranspose(output_channels, kernel_size=1, padding='same', activation='sigmoid')
 
 
     def call(self, z: tf.Tensor, condition: tf.Tensor, training: bool):
@@ -150,14 +165,13 @@ class Decoder(tf.keras.layers.Layer):
         else:
             x = z
 
-        #x = self.embeddings(x, training=training)
-        #x = tf.reshape(x, [-1] + self.decoder_input_shape)
+        x = self.embeddings(x, training=training)
+        x = tf.reshape(x, [-1] + self.decoder_input_shape)
 
         for layer in self.layers:
             x = layer(x, training=training)
 
         x = self.out(x, training=training)
-        x = tf.reshape(x, [-1, 28, 28, 1])
         return x
 
 class VAE(tf.keras.Model):
@@ -175,7 +189,7 @@ class VAE(tf.keras.Model):
         self.n_z = num_z
 
         h, w, _ = encoder_input_shape
-        #self.resize = tf.keras.layers.experimental.preprocessing.Resizing(h, w)
+        self.resize = tf.keras.layers.experimental.preprocessing.Resizing(h, w)
         self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
 
         self.encoder = Encoder(encoder_hidden_dims, have_condition, encoder_input_shape, num_z)
@@ -189,14 +203,10 @@ class VAE(tf.keras.Model):
         return z
 
     def call(self, inputs: tf.Tensor, condition: tf.Tensor, training: bool):
-        batch_size = tf.shape(inputs)[0]
+        x = self.resize(inputs)
+        scaled_x = self.rescale(x)
 
-        #x = self.resize(inputs)
-        scaled_x = self.rescale(inputs)
-        scaled_x = tf.reshape(scaled_x, [-1, 28, 28, 1])
-        reshaped_x = tf.reshape(scaled_x, [batch_size, -1])
-
-        mu, sigma = self.encoder(reshaped_x, condition, training=training)
+        mu, sigma = self.encoder(scaled_x, condition, training=training)
 
         z = self.sample_from_encoder_vars(mu, sigma)
 
@@ -215,7 +225,6 @@ class VAE(tf.keras.Model):
 
         dec_output = self.decoder(z, condition, training=False)
         grey_data = tf.cast(dec_output * 255, tf.uint8)
-        grey_data = tf.reshape(grey_data, [-1, 28, 28, 1])
 
         indexes = tf.range(tf.shape(condition)[0])
 
@@ -294,20 +303,21 @@ def main():
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(batch_size)
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size).cache()
 
-    encoder_hidden_dims = [512]
+    encoder_hidden_dims = [16, 32]
+    encoder_input_shape = [28, 28, 1]
     num_latent_vars = 2
 
-    decoder_hidden_dims = [512]
+    decoder_hidden_dims = [32, 16]
 
     model = VAE(have_condition=True,
                 encoder_hidden_dims=encoder_hidden_dims,
-                encoder_input_shape=[28, 28, 1],
+                encoder_input_shape=encoder_input_shape,
                 num_z=num_latent_vars,
                 decoder_hidden_dims=decoder_hidden_dims,
-                decoder_input_shape=[28, 28, 1],
+                decoder_input_shape=[7, 7, 32],
                 decoder_output_channels=1)
 
-    model(tf.ones([batch_size, 28, 28, 1], dtype=tf.float32), condition=tf.zeros([batch_size, num_labels], dtype=tf.float32), training=True)
+    model(tf.ones([batch_size] + encoder_input_shape, dtype=tf.float32), condition=tf.zeros([batch_size, num_labels], dtype=tf.float32), training=True)
     model.summary()
 
     generate_labels = tf.range(num_labels)
