@@ -28,9 +28,9 @@ class EncoderBlock(tf.keras.layers.Layer):
         self.conv0 = tf.keras.layers.Conv2D(channels_in, kernel_size=1, strides=1, name='conv0', padding='same')
         self.bn1 = tf.keras.layers.BatchNormalization()
         self.conv1 = tf.keras.layers.Conv2D(channels_in, kernel_size=3, strides=2, name='conv1', padding='same')
-        self.conv2 = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=1, name='conv1', padding='same')
+        self.conv2 = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=1, name='conv2', padding='same')
 
-        self.shortcut = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=2, name='conv1', padding='same')
+        self.shortcut = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=2, name='shortcut', padding='same')
 
     def __call__(self, inputs, training=True):
         preact = self.preact_bn(inputs, training=training)
@@ -308,7 +308,7 @@ def main():
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(batch_size)
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size).cache()
 
-    encoder_hidden_dims = [16, 32, 64]
+    encoder_hidden_dims = [16, 32, 64, 128]
     encoder_input_shape = [28, 28, 1]
     num_latent_vars = 2
 
