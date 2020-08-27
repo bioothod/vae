@@ -31,13 +31,17 @@ class SmallBlockV2(tf.keras.layers.Layer):
         self.bn0 = tf.keras.layers.BatchNormalization(epsilon=global_bn_eps)
         self.conv0 = tf.keras.layers.Conv2D(channels_in, kernel_size=3, strides=1, use_bias=False)
 
+        self.pad1 = tf.keras.layers.ZeroPadding2D(padding=((1, 1), (1, 1)), name='conv_1_pad')
         self.bn1 = tf.keras.layers.BatchNormalization(epsilon=global_bn_eps)
         self.conv1 = tf.keras.layers.Conv2D(channels_in, kernel_size=kernel_size, strides=stride, use_bias=False)
 
         if conv_shortcut:
-            self.shortcut = tf.keras.layers.Conv2D(channels_out, kernel_size=1, strides=stride)
+            self.shortcut = tf.keras.layers.Conv2D(channels_in, kernel_size=1, strides=stride)
         else:
-            self.shortcut = tf.keras.layers.MaxPool2D(pool_size=1, strides=stride)
+            if stride > 1:
+                self.shortcut = tf.keras.layers.MaxPool2D(pool_size=1, strides=stride)
+            else:
+                self.shortcut = lambda x: x
 
     def call(self, inputs, training):
         x = self.preact_bn(inputs, training=training)
@@ -49,11 +53,9 @@ class SmallBlockV2(tf.keras.layers.Layer):
         x = self.bn0(x, training=training)
         x = relu_fn(x)
 
+        x = self.pad1(x)
         x = self.conv1(x)
-        x = self.bn1(x, training=training)
-        x = relu_fn(x)
 
-        x = self.conv2(x)
         x += shortcut
         return x
 
@@ -101,14 +103,14 @@ class BlockV2(tf.keras.layers.Layer):
         return x
 
 class StackV2(tf.keras.layers.Layer):
-    def __init__(self, channels_in, blocks, stride1=2, **kwargs):
+    def __init__(self, channels_in, num_blocks, block=BlockV2, stride1=2, **kwargs):
         super().__init__(**kwargs)
 
-        self.blocks = [BlockV2(channels_in, conv_shortcut=True, name='block1')]
-        for i in range(2, blocks):
-            self.blocks.append(BlockV2(channels_in, name='block{}'.format(i)))
+        self.blocks = [block(channels_in, conv_shortcut=True, name='block0')]
+        for i in range(2, num_blocks):
+            self.blocks.append(block(channels_in, name='block{}'.format(i-1)))
 
-        self.blocks.append(BlockV2(channels_in, stride=stride1, name='block{}'.format(blocks)))
+        self.blocks.append(block(channels_in, stride=stride1, name='block{}'.format(num_blocks)))
 
     def call(self, x, training):
         for block in self.blocks:
@@ -122,10 +124,10 @@ class ResNet18V2(tf.keras.layers.Layer):
 
         self.base = BaseV2()
         self.stacks = []
-        self.stacks.append(StackV2(64, blocks=2, name='conv2'))
-        self.stacks.append(StackV2(128, blocks=2, name='conv3'))
-        self.stacks.append(StackV2(256, blocks=2, name='conv4'))
-        self.stacks.append(StackV2(512, blocks=2, stride1=1, name='conv5'))
+        self.stacks.append(StackV2(64, blocks=2, block=SmallBlockV2, name='stack0'))
+        self.stacks.append(StackV2(128, blocks=2, block=SmallBlockV2,, name='stack1'))
+        self.stacks.append(StackV2(256, blocks=2, block=SmallBlockV2,, name='stack2'))
+        self.stacks.append(StackV2(512, blocks=2, block=SmallBlockV2,, stride1=1, name='stack3'))
 
     def call(self, inputs, training):
         x = self.base(inputs, training=training)
@@ -141,10 +143,10 @@ class ResNet34V2(tf.keras.layers.Layer):
 
         self.base = BaseV2()
         self.stacks = []
-        self.stacks.append(StackV2(64, blocks=2, name='conv2'))
-        self.stacks.append(StackV2(128, blocks=2, name='conv3'))
-        self.stacks.append(StackV2(256, blocks=2, name='conv4'))
-        self.stacks.append(StackV2(512, blocks=2, stride1=1, name='conv5'))
+        self.stacks.append(StackV2(64, blocks=3, block=SmallBlockV2,, name='stack0'))
+        self.stacks.append(StackV2(128, blocks=4, block=SmallBlockV2,, name='stack1'))
+        self.stacks.append(StackV2(256, blocks=6, block=SmallBlockV2,, name='stack2'))
+        self.stacks.append(StackV2(512, blocks=3, block=SmallBlockV2,, stride1=1, name='stack3'))
 
     def call(self, inputs, training):
         x = self.base(inputs, training=training)
