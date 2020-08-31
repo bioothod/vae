@@ -80,6 +80,9 @@ class MetricAggregator:
         return self.eval_metric.acc.result()
 
     def __call__(self, y_true, y_pred, training):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+
         ce_loss = self.ce_loss(y_true, y_pred)
 
         m = self.train_metric if training else self.eval_metric
@@ -90,8 +93,10 @@ class MetricAggregator:
         return ce_loss
 
 class Model(tf.keras.Model):
-    def __init__(self, model_name, num_classes, image_size, classifier_activation='softmax', **kwargs):
+    def __init__(self, model_name, num_classes, image_size, classifier_activation='softmax', dtype=tf.float32, **kwargs):
         super(Model, self).__init__()
+
+        self.model_dtype = dtype
 
         self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
         self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
@@ -117,6 +122,8 @@ class Model(tf.keras.Model):
 
     def call(self, inputs, training):
         x = self.resize(inputs)
+        x = tf.cast(x, self.model_dtype)
+
         x = self.random_flip(x)
         x = self.rescale(x)
 
@@ -171,9 +178,6 @@ def main():
 
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
-    x_train = tf.cast(x_train, tf.float32)
-    x_test = tf.cast(x_test, tf.float32)
-
     num_train_images = len(x_train)
     num_eval_images = len(x_test)
 
@@ -187,7 +191,7 @@ def main():
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(FLAGS.batch_size)
     eval_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(FLAGS.batch_size).cache()
 
-    model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size, input_shape=[FLAGS.image_size, FLAGS.image_size, 3])
+    model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size, dtype=dtype)
 
     metric = MetricAggregator(from_logits=False)
 
@@ -196,6 +200,8 @@ def main():
     epoch_var = tf.Variable(0, dtype=tf.float32, name='epoch_number', aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
 
     opt = tf.keras.optimizers.Adam(lr=learning_rate)
+    if FLAGS.use_fp16:
+        opt = mixed_precision.LossScaleOptimizer(opt, loss_scale='dynamic')
 
     @tf.function
     def train_step(images, labels):
@@ -212,11 +218,19 @@ def main():
 
                 total_loss += l2_loss
 
+            if FLAGS.use_fp16:
+                scaled_total_loss = opt.get_scaled_loss(total_loss)
 
         metric.train_metric.total_loss.update_state(total_loss)
 
-        gradients = tape.gradient(total_loss, model.trainable_variables)
+        if FLAGS.use_fp16:
+            scaled_gradients = tape.gradient(scaled_total_loss, model.trainable_variables)
+            gradients = opt.get_unscaled_gradients(scaled_gradients)
+        else:
+            gradients = tape.gradient(total_loss, model.trainable_variables)
+
         opt.apply_gradients(zip(gradients, model.trainable_variables))
+
         return total_loss
 
     @tf.function
@@ -321,8 +335,6 @@ def main():
 
 
     log_layer(model)
-    #model.model(input_shape=[FLAGS.image_size, FLAGS.image_size, 3], training=True).summary()
-
 
     num_vars = len(model.trainable_variables)
     num_params = np.sum([np.prod(v.shape) for v in model.trainable_variables])
