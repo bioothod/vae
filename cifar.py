@@ -98,9 +98,9 @@ class Model(tf.keras.Model):
 
         self.model_dtype = dtype
 
-        self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
-        self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
-        self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
+        #self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
+        #self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
+        #self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
 
         if model_name == 'resnet50v2':
             self.features = resnet.ResNet50V2()
@@ -121,18 +121,46 @@ class Model(tf.keras.Model):
         super(Model, self).__init__(inputs=[inputs], outputs=[outputs])
 
     def call(self, inputs, training):
-        x = self.resize(inputs)
-        x = tf.cast(x, self.model_dtype)
+        #x = self.resize(inputs)
+        #x = tf.cast(x, self.model_dtype)
 
-        x = self.random_flip(x)
-        x = self.rescale(x)
+        #x = self.random_flip(x)
+        #x = self.rescale(x)
 
-        x = self.features(x, training)
+        #x = self.features(x, training)
+        x = self.features(inputs, training)
 
         x = self.avg_pooling(x)
         x = self.dense(x)
 
         return x
+
+def pad_resize_image(image, dims):
+    image = tf.image.resize(image, dims, preserve_aspect_ratio=True)
+
+    shape = tf.shape(image)
+
+    sxd = dims[1] - shape[1]
+    syd = dims[0] - shape[0]
+
+    sx = tf.cast(sxd / 2, dtype=tf.int32)
+    sy = tf.cast(syd / 2, dtype=tf.int32)
+
+    paddings = tf.convert_to_tensor([[sy, syd - sy], [sx, sxd - sx], [0, 0]])
+    image = tf.pad(image, paddings, mode='CONSTANT', constant_values=128)
+    return image
+
+def tf_read_image(image, label, dtype):
+    #image = tf.io.read_file(filename)
+    #image = tf.io.decode_jpeg(image, channels=3)
+
+    image = tf.image.resize(image, [FLAGS.image_size, FLAGS.image_size], preserve_aspect_ratio=False)
+    image = tf.cast(image, dtype)
+    image = image / 255
+
+    image = tf.image.random_flip_left_right(image)
+
+    return image, label
 
 def main():
     hvd.init()
@@ -188,8 +216,28 @@ def main():
     y_train = tf.squeeze(y_train, 1)
     y_test = tf.squeeze(y_test, 1)
 
-    train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(FLAGS.batch_size)
-    eval_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(FLAGS.batch_size).cache()
+    
+    def create_dataset(name, images, labels, training):
+        ds = tf.data.Dataset.from_tensor_slices((images, labels))
+
+        if training:
+            ds = ds.shuffle(10000)
+
+        ds = ds.map(lambda image, label: tf_read_image(image, label, dtype),
+                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+        ds = ds.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        ds = ds.batch(FLAGS.batch_size)
+
+        if not training:
+            ds = ds.cache()
+
+        logging.info('{}: {}: dataset has been created'.format(hvd.rank(), name))
+
+        return ds
+
+    train_ds = create_dataset('train', x_train, y_train, training=True)
+    eval_ds = create_dataset('eval', x_test, y_test, training=False)
 
     model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size, dtype=dtype)
 
@@ -317,7 +365,8 @@ def main():
     def validation_metric():
         return metric.evaluation_result()
 
-    model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=tf.uint8), training=True)
+    #model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=tf.uint8), training=True)
+    model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=dtype), training=True)
 
     def log_layer(m, spaces=0):
         for l in m.layers:
