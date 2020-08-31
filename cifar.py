@@ -91,7 +91,7 @@ class MetricAggregator:
 
 class Model(tf.keras.Model):
     def __init__(self, model_name, num_classes, image_size, classifier_activation='softmax', **kwargs):
-        super().__init__(**kwargs)
+        super(Model, self).__init__()
 
         self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
         self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
@@ -108,10 +108,12 @@ class Model(tf.keras.Model):
         else:
             raise ValueError('model name "{}" is not supported'.format(model_name))
 
-        self.preact_bn = tf.keras.layers.BatchNormalization(epsilon=resnet.global_bn_eps)
-
         self.avg_pooling = tf.keras.layers.GlobalAveragePooling2D()
         self.dense = tf.keras.layers.Dense(num_classes, activation=classifier_activation)
+
+        inputs = tf.keras.Input([None, None, 3])
+        outputs = self.call(inputs, training=True)
+        super(Model, self).__init__(inputs=[inputs], outputs=[outputs])
 
     def call(self, inputs, training):
         x = self.resize(inputs)
@@ -119,9 +121,6 @@ class Model(tf.keras.Model):
         x = self.rescale(x)
 
         x = self.features(x, training)
-
-        x = self.preact_bn(x, training=training)
-        x = resnet.relu_fn(x)
 
         x = self.avg_pooling(x)
         x = self.dense(x)
@@ -188,7 +187,7 @@ def main():
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch(FLAGS.batch_size)
     eval_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(FLAGS.batch_size).cache()
 
-    model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size)
+    model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size, input_shape=[FLAGS.image_size, FLAGS.image_size, 3])
 
     metric = MetricAggregator(from_logits=False)
 
@@ -305,6 +304,25 @@ def main():
         return metric.evaluation_result()
 
     model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=tf.uint8), training=True)
+
+    def log_layer(m, spaces=0):
+        for l in m.layers:
+            name = l.name + ','
+            output_shapes = [l.get_output_shape_at(i) for i in range(len(l._inbound_nodes))]
+            output_shapes = str(output_shapes) + ','
+
+            num_params = np.sum([np.prod(v.shape) for v in l.trainable_variables])
+            num_params = int(num_params)
+            logger.info('{} {:24s} output_shapes: {:56s} num_params: {}'.format(' '*spaces, name, output_shapes, num_params))
+            if hasattr(l, 'layers'):
+                spaces += 1
+                log_layer(l, spaces)
+                spaces -= 1
+
+
+    log_layer(model)
+    #model.model(input_shape=[FLAGS.image_size, FLAGS.image_size, 3], training=True).summary()
+
 
     num_vars = len(model.trainable_variables)
     num_params = np.sum([np.prod(v.shape) for v in model.trainable_variables])
