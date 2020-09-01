@@ -5,6 +5,7 @@ import re
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_addons as tfa
 from tensorflow.keras.mixed_precision import experimental as mixed_precision
 
 import horovod.tensorflow as hvd
@@ -108,7 +109,11 @@ class Model(tf.keras.Model):
             self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
             self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
 
-        if model_name == 'resnet50v2':
+        if model_name == 'resnet18v2':
+            self.features = resnet.ResNet18V2()
+        elif model_name == 'resnet34v2':
+            self.features = resnet.ResNet34V2()
+        elif model_name == 'resnet50v2':
             self.features = resnet.ResNet50V2()
         elif model_name == 'resnet101v2':
             self.features = resnet.ResNet101V2()
@@ -268,7 +273,9 @@ def main():
     learning_rate = tf.Variable(FLAGS.initial_learning_rate, dtype=tf.float32, name='learning_rate')
     epoch_var = tf.Variable(0, dtype=tf.float32, name='epoch_number', aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
 
-    opt = tf.keras.optimizers.Adam(lr=learning_rate)
+    #opt = tf.keras.optimizers.Adam(lr=learning_rate)
+    opt = tfa.optimizers.RectifiedAdam(lr=learning_rate, min_lr=FLAGS.min_learning_rate)
+    opt = tfa.optimizers.Lookahead(opt, sync_period=6, slow_step_size=0.5)
     if FLAGS.use_fp16:
         opt = mixed_precision.LossScaleOptimizer(opt, loss_scale='dynamic')
 
