@@ -23,8 +23,10 @@ parser.add_argument('--initial_learning_rate', default=1e-3, type=float, help='I
 parser.add_argument('--min_learning_rate', default=1e-6, type=float, help='Minimal learning rate')
 parser.add_argument('--print_per_train_steps', default=20, type=int, help='Print train stats per this number of steps(batches)')
 parser.add_argument('--min_eval_metric', default=0.2, type=float, help='Minimal evaluation metric to start saving models')
-parser.add_argument('--epochs_lr_update', default=20, type=int, help='Maximum number of epochs without improvement used to reset or decrease learning rate')
+parser.add_argument('--epochs_lr_update', default=10, type=int, help='Maximum number of epochs without improvement used to reset or decrease learning rate')
 parser.add_argument('--use_fp16', action='store_true', help='Whether to use fp16 training/inference')
+parser.add_argument('--dummy_input', action='store_true', help='Benchmark flag to generate dummy input without image preprocessing')
+parser.add_argument('--use_cpu_preprocessing', action='store_true', help='Whether to use CPU preprocessing')
 parser.add_argument('--steps_per_train_epoch', default=-1, type=int, help='Number of steps per train run')
 parser.add_argument('--steps_per_eval_epoch', default=-1, type=int, help='Number of steps per evaluation run')
 parser.add_argument('--reset_on_lr_update', action='store_true', help='Whether to reset to the best model after learning rate update')
@@ -93,14 +95,18 @@ class MetricAggregator:
         return ce_loss
 
 class Model(tf.keras.Model):
-    def __init__(self, model_name, num_classes, image_size, classifier_activation='softmax', dtype=tf.float32, **kwargs):
+    def __init__(self, model_name, num_classes, image_size, classifier_activation='softmax', dtype=tf.float32, need_preprocessing=True, dummy_input=False, **kwargs):
         super(Model, self).__init__()
 
         self.model_dtype = dtype
+        self.need_preprocessing = need_preprocessing
+        self.image_size = image_size
+        self.dummy_input = dummy_input
 
-        #self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
-        #self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
-        #self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
+        if need_preprocessing:
+            self.resize = tf.keras.layers.experimental.preprocessing.Resizing(image_size, image_size)
+            self.random_flip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode='horizontal')
+            self.rescale = tf.keras.layers.experimental.preprocessing.Rescaling(1 / 255)
 
         if model_name == 'resnet50v2':
             self.features = resnet.ResNet50V2()
@@ -121,14 +127,20 @@ class Model(tf.keras.Model):
         super(Model, self).__init__(inputs=[inputs], outputs=[outputs])
 
     def call(self, inputs, training):
-        #x = self.resize(inputs)
-        #x = tf.cast(x, self.model_dtype)
+        if self.need_preprocessing:
+            if self.dummy_input:
+                batch_size = tf.shape(inputs)[0]
+                x = tf.ones([batch_size, self.image_size, self.image_size, 3], dtype=self.model_dtype)
+            else:
+                x = self.resize(inputs)
+                x = tf.cast(x, self.model_dtype)
 
-        #x = self.random_flip(x)
-        #x = self.rescale(x)
+                x = self.random_flip(x)
+                x = self.rescale(x)
+        else:
+            x = inputs
 
-        #x = self.features(x, training)
-        x = self.features(inputs, training)
+        x = self.features(x, training)
 
         x = self.avg_pooling(x)
         x = self.dense(x)
@@ -154,11 +166,15 @@ def tf_read_image(image, label, dtype):
     #image = tf.io.read_file(filename)
     #image = tf.io.decode_jpeg(image, channels=3)
 
-    image = tf.image.resize(image, [FLAGS.image_size, FLAGS.image_size], preserve_aspect_ratio=False)
-    image = tf.cast(image, dtype)
-    image = image / 255
+    if FLAGS.dummy_input:
+        #image = tf.random.uniform([FLAGS.image_size, FLAGS.image_size, 3], minval=0, maxval=1, dtype=dtype)
+        image = tf.ones([FLAGS.image_size, FLAGS.image_size, 3], dtype=dtype)
+    else:
+        image = tf.image.resize(image, [FLAGS.image_size, FLAGS.image_size], preserve_aspect_ratio=False)
+        image = tf.cast(image, dtype)
+        image = image / 255
 
-    image = tf.image.random_flip_left_right(image)
+        image = tf.image.random_flip_left_right(image)
 
     return image, label
 
@@ -216,15 +232,15 @@ def main():
     y_train = tf.squeeze(y_train, 1)
     y_test = tf.squeeze(y_test, 1)
 
-    
     def create_dataset(name, images, labels, training):
         ds = tf.data.Dataset.from_tensor_slices((images, labels))
 
         if training:
             ds = ds.shuffle(10000)
 
-        ds = ds.map(lambda image, label: tf_read_image(image, label, dtype),
-                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        if FLAGS.use_cpu_preprocessing:
+            ds = ds.map(lambda image, label: tf_read_image(image, label, dtype),
+                        num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
         ds = ds.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
         ds = ds.batch(FLAGS.batch_size)
@@ -239,7 +255,12 @@ def main():
     train_ds = create_dataset('train', x_train, y_train, training=True)
     eval_ds = create_dataset('eval', x_test, y_test, training=False)
 
-    model = Model(model_name=FLAGS.model_name, num_classes=num_classes, image_size=FLAGS.image_size, dtype=dtype)
+    model = Model(model_name=FLAGS.model_name,
+                  num_classes=num_classes,
+                  image_size=FLAGS.image_size,
+                  dtype=dtype,
+                  need_preprocessing=not FLAGS.use_cpu_preprocessing,
+                  dummy_input=FLAGS.dummy_input)
 
     metric = MetricAggregator(from_logits=False)
 
@@ -325,7 +346,7 @@ def main():
                     first_batch = False
 
                 if (step % FLAGS.print_per_train_steps == 0) or np.isnan(total_loss.numpy()):
-                    log_progress()
+                    #log_progress()
 
                     if np.isnan(total_loss.numpy()):
                         exit(-1)
@@ -336,7 +357,7 @@ def main():
             if step >= max_steps:
                 break
 
-        log_progress()
+        #log_progress()
 
         return step
 
@@ -365,8 +386,10 @@ def main():
     def validation_metric():
         return metric.evaluation_result()
 
-    #model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=tf.uint8), training=True)
-    model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=dtype), training=True)
+    if FLAGS.use_cpu_preprocessing:
+        model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=dtype), training=True)
+    else:
+        model(tf.ones([FLAGS.batch_size, FLAGS.image_size, FLAGS.image_size, 3], dtype=tf.uint8), training=True)
 
     def log_layer(m, spaces=0):
         for l in m.layers:
