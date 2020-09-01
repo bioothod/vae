@@ -1,4 +1,8 @@
+import logging
+
 import tensorflow as tf
+
+logger = logging.getLogger("cifar")
 
 relu_fn = tf.nn.relu
 global_bn_eps = 1.001e-5
@@ -28,11 +32,11 @@ class SmallBlockV2(tf.keras.Model):
 
         self.preact_bn = tf.keras.layers.BatchNormalization(epsilon=global_bn_eps, name='preact_bn')
 
+        self.pad0 = tf.keras.layers.ZeroPadding2D(padding=((1, 1), (1, 1)), name='pad0')
         self.bn0 = tf.keras.layers.BatchNormalization(epsilon=global_bn_eps, name='bn0')
         self.conv0 = tf.keras.layers.Conv2D(channels_in, kernel_size=3, strides=1, use_bias=False, name='conv0')
 
         self.pad1 = tf.keras.layers.ZeroPadding2D(padding=((1, 1), (1, 1)), name='pad1')
-        self.bn1 = tf.keras.layers.BatchNormalization(epsilon=global_bn_eps, name='bn1')
         self.conv1 = tf.keras.layers.Conv2D(channels_in, kernel_size=kernel_size, strides=stride, use_bias=False, name='conv1')
 
         if conv_shortcut:
@@ -49,7 +53,8 @@ class SmallBlockV2(tf.keras.Model):
 
         shortcut = self.shortcut(preact)
 
-        x = self.conv0(preact)
+        x = self.pad0(preact)
+        x = self.conv0(x)
         x = self.bn0(x, training=training)
         x = relu_fn(x)
 
