@@ -121,6 +121,18 @@ class Model(tf.keras.Model):
             self.features = tf.keras.applications.ResNet101V2(include_top=False, weights=None)
         elif model_name == 'resnet50v2_keras':
             self.features = tf.keras.applications.ResNet50V2(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b0':
+            self.features = tf.keras.applications.EfficientNetB0(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b1':
+            self.features = tf.keras.applications.EfficientNetB1(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b2':
+            self.features = tf.keras.applications.EfficientNetB2(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b3':
+            self.features = tf.keras.applications.EfficientNetB3(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b4':
+            self.features = tf.keras.applications.EfficientNetB4(include_top=False, weights=None)
+        elif model_name == 'efficientnet-b5':
+            self.features = tf.keras.applications.EfficientNetB5(include_top=False, weights=None)
         else:
             raise ValueError('model name "{}" is not supported'.format(model_name))
 
