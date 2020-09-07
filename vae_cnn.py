@@ -136,6 +136,8 @@ class Encoder(tf.keras.layers.Layer):
         x = self.flatten(x)
 
         mu = self.z_mu(x)
+
+        # this is actually log(sigma**2)
         sigma = self.z_sigma(x)
 
         return mu, sigma
@@ -263,14 +265,19 @@ class Loss:
         self.train_metric = Metric()
         self.eval_metric = Metric()
 
-        #self.pixel_loss = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)
-        self.pixel_loss = tf.keras.losses.BinaryCrossentropy(from_logits=from_logits, reduction=tf.keras.losses.Reduction.SUM)
+        self.pixel_loss = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)
+        #self.pixel_loss = tf.keras.losses.BinaryCrossentropy(from_logits=from_logits, reduction=tf.keras.losses.Reduction.SUM)
 
     def reset_states(self):
         self.train_metric.reset_states()
         self.eval_metric.reset_states()
 
-    def z_kl_loss(self, mu, sigma):
+    def z_kl_loss_mc_sampling(self, mu, sigma):
+        logpz = normal_log_pdf(z_sample, 0., 1.)  # shape=(batch_size,)
+        logqz_x = normal_log_pdf(z_sample, mu, tf.math.square(sd))  # shape=(batch_size,)
+        kl_divergence = logqz_x - logpz
+
+    def z_kl_loss_analytical_for_gauss(self, mu, sigma):
         x = tf.math.exp(sigma) + tf.math.square(mu) - 1 - sigma
         x = 0.5 * tf.reduce_sum(x, -1)
         return x
@@ -279,7 +286,7 @@ class Loss:
         rec_loss = self.pixel_loss(true_images, pred_images)
         #rec_loss = tf.reduce_sum(rec_loss, [1])
 
-        kl_loss = self.z_kl_loss(mu, sigma)
+        kl_loss = self.z_kl_loss_analytical_for_gauss(mu, sigma)
 
         m = self.train_metric if training else self.eval_metric
         m.kl_loss.update_state(kl_loss)
