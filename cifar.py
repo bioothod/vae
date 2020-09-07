@@ -11,6 +11,7 @@ from tensorflow.keras.mixed_precision import experimental as mixed_precision
 import horovod.tensorflow as hvd
 
 import resnet
+import resnest
 
 logger = logging.getLogger("cifar")
 
@@ -34,6 +35,7 @@ parser.add_argument('--reset_on_lr_update', action='store_true', help='Whether t
 parser.add_argument('--rotation_augmentation', type=float, default=0, help='Rotation augmentation angle, value <= 0 disables it')
 parser.add_argument('--reg_loss_weight', type=float, default=0, help='L2 regularization weight')
 parser.add_argument('--image_size', type=int, default=224, help='Image size')
+parser.add_argument('--optimizer', type=str, default="adam", choices=["adam", "radam+lookahead"], help='Optimizer type')
 FLAGS = parser.parse_args()
 
 class Metric:
@@ -133,6 +135,9 @@ class Model(tf.keras.Model):
             self.features = tf.keras.applications.EfficientNetB4(include_top=False, weights=None)
         elif model_name == 'efficientnet-b5':
             self.features = tf.keras.applications.EfficientNetB5(include_top=False, weights=None)
+        elif model_name == 'resnest50':
+            rs = resnest.ResNest(include_top=False, input_shape=[FLAGS.image_size, FLAGS.image_size, 3])
+            self.features = rs.build()
         else:
             raise ValueError('model name "{}" is not supported'.format(model_name))
 
@@ -285,9 +290,15 @@ def main():
     learning_rate = tf.Variable(FLAGS.initial_learning_rate, dtype=tf.float32, name='learning_rate')
     epoch_var = tf.Variable(0, dtype=tf.float32, name='epoch_number', aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
 
-    #opt = tf.keras.optimizers.Adam(lr=learning_rate)
-    opt = tfa.optimizers.RectifiedAdam(lr=learning_rate, min_lr=FLAGS.min_learning_rate)
-    opt = tfa.optimizers.Lookahead(opt, sync_period=6, slow_step_size=0.5)
+    if FLAGS.optimizer == "adam":
+        opt = tf.keras.optimizers.Adam(lr=learning_rate)
+    elif FLAGS.optimizer == "radam+lookahead":
+        opt = tfa.optimizers.RectifiedAdam(lr=learning_rate, min_lr=FLAGS.min_learning_rate)
+        opt = tfa.optimizers.Lookahead(opt, sync_period=6, slow_step_size=0.5)
+    else:
+        logger.error('Unsupported optimizer name {}'.format(FLAGS.optimizer))
+        exit(-1)
+
     if FLAGS.use_fp16:
         opt = mixed_precision.LossScaleOptimizer(opt, loss_scale='dynamic')
 
